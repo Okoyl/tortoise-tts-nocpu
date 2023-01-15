@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import autocast
 
-from tortoise.models.arch_util import normalization, AttentionBlock
+from tortoise.models.arch_util import AttentionBlock, normalization
 
 
 def is_latent(t):
@@ -30,12 +30,14 @@ def timestep_embedding(timesteps, dim, max_period=10000):
     """
     half = dim // 2
     freqs = torch.exp(
-        -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
+        -math.log(max_period) * torch.arange(start=0,
+                                             end=half, dtype=torch.float32) / half
     ).to(device=timesteps.device)
     args = timesteps[:, None].float() * freqs[None]
     embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
     if dim % 2:
-        embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+        embedding = torch.cat(
+            [embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
     return embedding
 
 
@@ -82,7 +84,8 @@ class ResBlock(TimestepBlock):
         self.in_layers = nn.Sequential(
             normalization(channels),
             nn.SiLU(),
-            nn.Conv1d(channels, self.out_channels, eff_kernel, padding=eff_padding),
+            nn.Conv1d(channels, self.out_channels,
+                      eff_kernel, padding=eff_padding),
         )
 
         self.emb_layers = nn.Sequential(
@@ -96,13 +99,15 @@ class ResBlock(TimestepBlock):
             normalization(self.out_channels),
             nn.SiLU(),
             nn.Dropout(p=dropout),
-                nn.Conv1d(self.out_channels, self.out_channels, kernel_size, padding=padding),
+            nn.Conv1d(self.out_channels, self.out_channels,
+                      kernel_size, padding=padding),
         )
 
         if self.out_channels == channels:
             self.skip_connection = nn.Identity()
         else:
-            self.skip_connection = nn.Conv1d(channels, self.out_channels, eff_kernel, padding=eff_padding)
+            self.skip_connection = nn.Conv1d(
+                channels, self.out_channels, eff_kernel, padding=eff_padding)
 
     def forward(self, x, emb):
         h = self.in_layers(x)
@@ -123,8 +128,10 @@ class ResBlock(TimestepBlock):
 class DiffusionLayer(TimestepBlock):
     def __init__(self, model_channels, dropout, num_heads):
         super().__init__()
-        self.resblk = ResBlock(model_channels, model_channels, dropout, model_channels, dims=1, use_scale_shift_norm=True)
-        self.attn = AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True)
+        self.resblk = ResBlock(model_channels, model_channels, dropout,
+                               model_channels, dims=1, use_scale_shift_norm=True)
+        self.attn = AttentionBlock(
+            model_channels, num_heads, relative_pos_embeddings=True)
 
     def forward(self, x, time_emb):
         y = self.resblk(x, time_emb)
@@ -145,7 +152,8 @@ class DiffusionTts(nn.Module):
             num_heads=16,
             # Parameters for regularization.
             layer_drop=.1,
-            unconditioned_percentage=.1,  # This implements a mechanism similar to what is used in classifier-free training.
+            # This implements a mechanism similar to what is used in classifier-free training.
+            unconditioned_percentage=.1,
     ):
         super().__init__()
 
@@ -171,34 +179,49 @@ class DiffusionTts(nn.Module):
         # transformer network.
         self.code_embedding = nn.Embedding(in_tokens, model_channels)
         self.code_converter = nn.Sequential(
-            AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True),
-            AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True),
-            AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True),
+            AttentionBlock(model_channels, num_heads,
+                           relative_pos_embeddings=True),
+            AttentionBlock(model_channels, num_heads,
+                           relative_pos_embeddings=True),
+            AttentionBlock(model_channels, num_heads,
+                           relative_pos_embeddings=True),
         )
         self.code_norm = normalization(model_channels)
         self.latent_conditioner = nn.Sequential(
             nn.Conv1d(in_latent_channels, model_channels, 3, padding=1),
-            AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True),
-            AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True),
-            AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True),
-            AttentionBlock(model_channels, num_heads, relative_pos_embeddings=True),
+            AttentionBlock(model_channels, num_heads,
+                           relative_pos_embeddings=True),
+            AttentionBlock(model_channels, num_heads,
+                           relative_pos_embeddings=True),
+            AttentionBlock(model_channels, num_heads,
+                           relative_pos_embeddings=True),
+            AttentionBlock(model_channels, num_heads,
+                           relative_pos_embeddings=True),
         )
-        self.contextual_embedder = nn.Sequential(nn.Conv1d(in_channels,model_channels,3,padding=1,stride=2),
-                                                 nn.Conv1d(model_channels, model_channels*2,3,padding=1,stride=2),
-                                                 AttentionBlock(model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
-                                                 AttentionBlock(model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
-                                                 AttentionBlock(model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
-                                                 AttentionBlock(model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
+        self.contextual_embedder = nn.Sequential(nn.Conv1d(in_channels, model_channels, 3, padding=1, stride=2, device='cuda:0'),
+                                                 nn.Conv1d(
+                                                     model_channels, model_channels*2, 3, padding=1, stride=2, device='cuda:0'),
+                                                 AttentionBlock(
+                                                     model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
+                                                 AttentionBlock(
+                                                     model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
+                                                 AttentionBlock(
+                                                     model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
+                                                 AttentionBlock(
+                                                     model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False),
                                                  AttentionBlock(model_channels*2, num_heads, relative_pos_embeddings=True, do_checkpoint=False))
-        self.unconditioned_embedding = nn.Parameter(torch.randn(1,model_channels,1))
+        self.unconditioned_embedding = nn.Parameter(
+            torch.randn(1, model_channels, 1))
         self.conditioning_timestep_integrator = TimestepEmbedSequential(
             DiffusionLayer(model_channels, dropout, num_heads),
             DiffusionLayer(model_channels, dropout, num_heads),
             DiffusionLayer(model_channels, dropout, num_heads),
         )
 
-        self.integrating_conv = nn.Conv1d(model_channels*2, model_channels, kernel_size=1)
-        self.mel_head = nn.Conv1d(model_channels, in_channels, kernel_size=3, padding=1)
+        self.integrating_conv = nn.Conv1d(
+            model_channels*2, model_channels, kernel_size=1)
+        self.mel_head = nn.Conv1d(
+            model_channels, in_channels, kernel_size=3, padding=1)
 
         self.layers = nn.ModuleList([DiffusionLayer(model_channels, dropout, num_heads) for _ in range(num_layers)] +
                                     [ResBlock(model_channels, model_channels, dropout, dims=1, use_scale_shift_norm=True) for _ in range(3)])
@@ -224,7 +247,8 @@ class DiffusionTts(nn.Module):
             conditioning_input.shape) == 3 else conditioning_input
         conds = []
         for j in range(speech_conditioning_input.shape[1]):
-            conds.append(self.contextual_embedder(speech_conditioning_input[:, j]))
+            conds.append(self.contextual_embedder(
+                speech_conditioning_input[:, j]))
         conds = torch.cat(conds, dim=-1)
         conds = conds.mean(dim=-1)
         return conds
@@ -238,18 +262,22 @@ class DiffusionTts(nn.Module):
         if is_latent(aligned_conditioning):
             code_emb = self.latent_conditioner(aligned_conditioning)
         else:
-            code_emb = self.code_embedding(aligned_conditioning).permute(0, 2, 1)
+            code_emb = self.code_embedding(
+                aligned_conditioning).permute(0, 2, 1)
             code_emb = self.code_converter(code_emb)
-        code_emb = self.code_norm(code_emb) * (1 + cond_scale.unsqueeze(-1)) + cond_shift.unsqueeze(-1)
+        code_emb = self.code_norm(
+            code_emb) * (1 + cond_scale.unsqueeze(-1)) + cond_shift.unsqueeze(-1)
 
-        unconditioned_batches = torch.zeros((code_emb.shape[0], 1, 1), device=code_emb.device)
+        unconditioned_batches = torch.zeros(
+            (code_emb.shape[0], 1, 1), device=code_emb.device)
         # Mask out the conditioning branch for whole batch elements, implementing something similar to classifier-free guidance.
         if self.training and self.unconditioned_percentage > 0:
             unconditioned_batches = torch.rand((code_emb.shape[0], 1, 1),
                                                device=code_emb.device) < self.unconditioned_percentage
             code_emb = torch.where(unconditioned_batches, self.unconditioned_embedding.repeat(aligned_conditioning.shape[0], 1, 1),
                                    code_emb)
-        expanded_code_emb = F.interpolate(code_emb, size=expected_seq_len, mode='nearest')
+        expanded_code_emb = F.interpolate(
+            code_emb, size=expected_seq_len, mode='nearest')
 
         if not return_code_pred:
             return expanded_code_emb
@@ -271,27 +299,36 @@ class DiffusionTts(nn.Module):
         :param conditioning_free: When set, all conditioning inputs (including tokens and conditioning_input) will not be considered.
         :return: an [N x C x ...] Tensor of outputs.
         """
-        assert precomputed_aligned_embeddings is not None or (aligned_conditioning is not None and conditioning_latent is not None)
-        assert not (return_code_pred and precomputed_aligned_embeddings is not None)  # These two are mutually exclusive.
+        assert precomputed_aligned_embeddings is not None or (
+            aligned_conditioning is not None and conditioning_latent is not None)
+        # These two are mutually exclusive.
+        assert not (
+            return_code_pred and precomputed_aligned_embeddings is not None)
 
         unused_params = []
         if conditioning_free:
-            code_emb = self.unconditioned_embedding.repeat(x.shape[0], 1, x.shape[-1])
-            unused_params.extend(list(self.code_converter.parameters()) + list(self.code_embedding.parameters()))
+            code_emb = self.unconditioned_embedding.repeat(
+                x.shape[0], 1, x.shape[-1])
+            unused_params.extend(
+                list(self.code_converter.parameters()) + list(self.code_embedding.parameters()))
             unused_params.extend(list(self.latent_conditioner.parameters()))
         else:
             if precomputed_aligned_embeddings is not None:
                 code_emb = precomputed_aligned_embeddings
             else:
-                code_emb, mel_pred = self.timestep_independent(aligned_conditioning, conditioning_latent, x.shape[-1], True)
+                code_emb, mel_pred = self.timestep_independent(
+                    aligned_conditioning, conditioning_latent, x.shape[-1], True)
                 if is_latent(aligned_conditioning):
-                    unused_params.extend(list(self.code_converter.parameters()) + list(self.code_embedding.parameters()))
+                    unused_params.extend(
+                        list(self.code_converter.parameters()) + list(self.code_embedding.parameters()))
                 else:
-                    unused_params.extend(list(self.latent_conditioner.parameters()))
+                    unused_params.extend(
+                        list(self.latent_conditioner.parameters()))
 
             unused_params.append(self.unconditioned_embedding)
 
-        time_emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+        time_emb = self.time_embed(
+            timestep_embedding(timesteps, self.model_channels))
         code_emb = self.conditioning_timestep_integrator(code_emb, time_emb)
         x = self.inp_block(x)
         x = torch.cat([x, code_emb], dim=1)
@@ -321,8 +358,8 @@ class DiffusionTts(nn.Module):
 
 if __name__ == '__main__':
     clip = torch.randn(2, 100, 400)
-    aligned_latent = torch.randn(2,388,512)
-    aligned_sequence = torch.randint(0,8192,(2,100))
+    aligned_latent = torch.randn(2, 388, 512)
+    aligned_sequence = torch.randint(0, 8192, (2, 100))
     cond = torch.randn(2, 100, 400)
     ts = torch.LongTensor([600, 600])
     model = DiffusionTts(512, layer_drop=.3, unconditioned_percentage=.5)
@@ -330,4 +367,3 @@ if __name__ == '__main__':
     #o = model(clip, ts, aligned_latent, cond)
     # Test with sequence aligned conditioning
     o = model(clip, ts, aligned_sequence, cond)
-

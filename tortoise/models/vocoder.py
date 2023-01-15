@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 MAX_WAV_VALUE = 32768.0
 
+
 class KernelPredictor(torch.nn.Module):
     ''' Kernel predictor for the location-variable convolutions'''
 
@@ -34,12 +35,15 @@ class KernelPredictor(torch.nn.Module):
         self.conv_kernel_size = conv_kernel_size
         self.conv_layers = conv_layers
 
-        kpnet_kernel_channels = conv_in_channels * conv_out_channels * conv_kernel_size * conv_layers  # l_w
+        kpnet_kernel_channels = conv_in_channels * \
+            conv_out_channels * conv_kernel_size * conv_layers  # l_w
         kpnet_bias_channels = conv_out_channels * conv_layers  # l_b
 
         self.input_conv = nn.Sequential(
-            nn.utils.weight_norm(nn.Conv1d(cond_channels, kpnet_hidden_channels, 5, padding=2, bias=True)),
-            getattr(nn, kpnet_nonlinear_activation)(**kpnet_nonlinear_activation_params),
+            nn.utils.weight_norm(
+                nn.Conv1d(cond_channels, kpnet_hidden_channels, 5, padding=2, bias=True)),
+            getattr(nn, kpnet_nonlinear_activation)(
+                **kpnet_nonlinear_activation_params),
         )
 
         self.residual_convs = nn.ModuleList()
@@ -51,11 +55,13 @@ class KernelPredictor(torch.nn.Module):
                     nn.utils.weight_norm(
                         nn.Conv1d(kpnet_hidden_channels, kpnet_hidden_channels, kpnet_conv_size, padding=padding,
                                   bias=True)),
-                    getattr(nn, kpnet_nonlinear_activation)(**kpnet_nonlinear_activation_params),
+                    getattr(nn, kpnet_nonlinear_activation)(
+                        **kpnet_nonlinear_activation_params),
                     nn.utils.weight_norm(
                         nn.Conv1d(kpnet_hidden_channels, kpnet_hidden_channels, kpnet_conv_size, padding=padding,
                                   bias=True)),
-                    getattr(nn, kpnet_nonlinear_activation)(**kpnet_nonlinear_activation_params),
+                    getattr(nn, kpnet_nonlinear_activation)(
+                        **kpnet_nonlinear_activation_params),
                 )
             )
         self.kernel_conv = nn.utils.weight_norm(
@@ -169,7 +175,8 @@ class LVCBlock(torch.nn.Module):
         for i, conv in enumerate(self.conv_blocks):
             output = conv(x)  # (B, c_g, stride * L')
 
-            k = kernels[:, i, :, :, :, :]  # (B, 2 * c_g, c_g, kernel_size, cond_length)
+            # (B, 2 * c_g, c_g, kernel_size, cond_length)
+            k = kernels[:, i, :, :, :, :]
             b = bias[:, i, :, :]  # (B, 2 * c_g, cond_length)
 
             output = self.location_variable_convolution(output, k, b,
@@ -193,23 +200,29 @@ class LVCBlock(torch.nn.Module):
         '''
         batch, _, in_length = x.shape
         batch, _, out_channels, kernel_size, kernel_length = kernel.shape
-        assert in_length == (kernel_length * hop_size), "length of (x, kernel) is not matched"
+        assert in_length == (
+            kernel_length * hop_size), "length of (x, kernel) is not matched"
 
         padding = dilation * int((kernel_size - 1) / 2)
-        x = F.pad(x, (padding, padding), 'constant', 0)  # (batch, in_channels, in_length + 2*padding)
-        x = x.unfold(2, hop_size + 2 * padding, hop_size)  # (batch, in_channels, kernel_length, hop_size + 2*padding)
+        # (batch, in_channels, in_length + 2*padding)
+        x = F.pad(x, (padding, padding), 'constant', 0)
+        # (batch, in_channels, kernel_length, hop_size + 2*padding)
+        x = x.unfold(2, hop_size + 2 * padding, hop_size)
 
         if hop_size < dilation:
             x = F.pad(x, (0, dilation), 'constant', 0)
         x = x.unfold(3, dilation,
                      dilation)  # (batch, in_channels, kernel_length, (hop_size + 2*padding)/dilation, dilation)
         x = x[:, :, :, :, :hop_size]
-        x = x.transpose(3, 4)  # (batch, in_channels, kernel_length, dilation, (hop_size + 2*padding)/dilation)
-        x = x.unfold(4, kernel_size, 1)  # (batch, in_channels, kernel_length, dilation, _, kernel_size)
+        # (batch, in_channels, kernel_length, dilation, (hop_size + 2*padding)/dilation)
+        x = x.transpose(3, 4)
+        # (batch, in_channels, kernel_length, dilation, _, kernel_size)
+        x = x.unfold(4, kernel_size, 1)
 
         o = torch.einsum('bildsk,biokl->bolsd', x, kernel)
         o = o.to(memory_format=torch.channels_last_3d)
-        bias = bias.unsqueeze(-1).unsqueeze(-1).to(memory_format=torch.channels_last_3d)
+        bias = bias.unsqueeze(-1).unsqueeze(-1).to(
+            memory_format=torch.channels_last_3d)
         o = o + bias
         o = o.contiguous().view(batch, out_channels, -1)
 
@@ -225,7 +238,7 @@ class LVCBlock(torch.nn.Module):
 class UnivNetGenerator(nn.Module):
     """UnivNet Generator"""
 
-    def __init__(self, noise_dim=64, channel_size=32, dilations=[1,3,9,27], strides=[8,8,4], lReLU_slope=.2, kpnet_conv_size=3,
+    def __init__(self, noise_dim=64, channel_size=32, dilations=[1, 3, 9, 27], strides=[8, 8, 4], lReLU_slope=.2, kpnet_conv_size=3,
                  # Below are MEL configurations options that this generator requires.
                  hop_length=256, n_mel_channels=100):
         super(UnivNetGenerator, self).__init__()
@@ -252,11 +265,13 @@ class UnivNetGenerator(nn.Module):
             )
 
         self.conv_pre = \
-            nn.utils.weight_norm(nn.Conv1d(noise_dim, channel_size, 7, padding=3, padding_mode='reflect'))
+            nn.utils.weight_norm(
+                nn.Conv1d(noise_dim, channel_size, 7, padding=3, padding_mode='reflect'))
 
         self.conv_post = nn.Sequential(
             nn.LeakyReLU(lReLU_slope),
-            nn.utils.weight_norm(nn.Conv1d(channel_size, 1, 7, padding=3, padding_mode='reflect')),
+            nn.utils.weight_norm(
+                nn.Conv1d(channel_size, 1, 7, padding=3, padding_mode='reflect')),
             nn.Tanh(),
         )
 
@@ -296,11 +311,13 @@ class UnivNetGenerator(nn.Module):
     def inference(self, c, z=None):
         # pad input mel with zeros to cut artifact
         # see https://github.com/seungwonpark/melgan/issues/8
-        zero = torch.full((c.shape[0], self.mel_channel, 10), -11.5129).to(c.device)
+        zero = torch.full(
+            (c.shape[0], self.mel_channel, 10), -11.5129).to(c.device)
         mel = torch.cat((c, zero), dim=2)
 
         if z is None:
-            z = torch.randn(c.shape[0], self.noise_dim, mel.size(2)).to(mel.device)
+            z = torch.randn(c.shape[0], self.noise_dim,
+                            mel.size(2)).to(mel.device)
 
         audio = self.forward(mel, z)
         audio = audio[:, :, :-(self.hop_length * 10)]
@@ -313,11 +330,10 @@ if __name__ == '__main__':
 
     c = torch.randn(3, 100, 10)
     z = torch.randn(3, 64, 10)
-    print(c.shape)
 
     y = model(c, z)
-    print(y.shape)
     assert y.shape == torch.Size([3, 1, 2560])
 
-    pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    pytorch_total_params = sum(p.numel()
+                               for p in model.parameters() if p.requires_grad)
     print(pytorch_total_params)

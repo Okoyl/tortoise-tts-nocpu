@@ -1,12 +1,14 @@
-import os
 import functools
 import math
+import os
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio
-from tortoise.models.xtransformers import ContinuousTransformerWrapper, RelativePositionBias
+
+from tortoise.models.xtransformers import (ContinuousTransformerWrapper,
+                                           RelativePositionBias)
 
 
 def zero_module(module):
@@ -38,7 +40,7 @@ def normalization(channels):
     while channels % groups != 0:
         groups = int(groups / 2)
     assert groups > 2
-    return GroupNorm32(groups, channels)
+    return GroupNorm32(groups, channels, device='cuda:0')
 
 
 class QKVAttentionLegacy(nn.Module):
@@ -60,13 +62,15 @@ class QKVAttentionLegacy(nn.Module):
         bs, width, length = qkv.shape
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
-        q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
+        q, k, v = qkv.reshape(bs * self.n_heads, ch * 3,
+                              length).split(ch, dim=1)
         scale = 1 / math.sqrt(math.sqrt(ch))
         weight = torch.einsum(
             "bct,bcs->bts", q * scale, k * scale
         )  # More stable with f16 than dividing afterwards
         if rel_pos is not None:
-            weight = rel_pos(weight.reshape(bs, self.n_heads, weight.shape[-2], weight.shape[-1])).reshape(bs * self.n_heads, weight.shape[-2], weight.shape[-1])
+            weight = rel_pos(weight.reshape(bs, self.n_heads, weight.shape[-2], weight.shape[-1])).reshape(
+                bs * self.n_heads, weight.shape[-2], weight.shape[-1])
         weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
         if mask is not None:
             # The proper way to do this is to mask before the softmax using -inf, but that doesn't work properly on CPUs.
@@ -104,13 +108,15 @@ class AttentionBlock(nn.Module):
             ), f"q,k,v channels {channels} is not divisible by num_head_channels {num_head_channels}"
             self.num_heads = channels // num_head_channels
         self.norm = normalization(channels)
-        self.qkv = nn.Conv1d(channels, channels * 3, 1)
+        self.qkv = nn.Conv1d(channels, channels * 3, 1, device='cuda')
         # split heads before split qkv
         self.attention = QKVAttentionLegacy(self.num_heads)
 
-        self.proj_out = zero_module(nn.Conv1d(channels, channels, 1))
+        self.proj_out = zero_module(
+            nn.Conv1d(channels, channels, 1, device='cuda'))
         if relative_pos_embeddings:
-            self.relative_pos_embeddings = RelativePositionBias(scale=(channels // self.num_heads) ** .5, causal=False, heads=num_heads, num_buckets=32, max_distance=64)
+            self.relative_pos_embeddings = RelativePositionBias(scale=(
+                channels // self.num_heads) ** .5, causal=False, heads=num_heads, num_buckets=32, max_distance=64)
         else:
             self.relative_pos_embeddings = None
 
@@ -140,7 +146,8 @@ class Upsample(nn.Module):
         if use_conv:
             ksize = 5
             pad = 2
-            self.conv = nn.Conv1d(self.channels, self.out_channels, ksize, padding=pad)
+            self.conv = nn.Conv1d(
+                self.channels, self.out_channels, ksize, padding=pad)
 
     def forward(self, x):
         assert x.shape[1] == self.channels
@@ -201,7 +208,8 @@ class ResBlock(nn.Module):
         self.in_layers = nn.Sequential(
             normalization(channels),
             nn.SiLU(),
-            nn.Conv1d(channels, self.out_channels, kernel_size, padding=padding),
+            nn.Conv1d(channels, self.out_channels,
+                      kernel_size, padding=padding),
         )
 
         self.updown = up or down
@@ -220,7 +228,8 @@ class ResBlock(nn.Module):
             nn.SiLU(),
             nn.Dropout(p=dropout),
             zero_module(
-                nn.Conv1d(self.out_channels, self.out_channels, kernel_size, padding=padding)
+                nn.Conv1d(self.out_channels, self.out_channels,
+                          kernel_size, padding=padding)
             ),
         )
 
@@ -267,7 +276,8 @@ class AudioMiniEncoder(nn.Module):
         for l in range(depth):
             for r in range(resnet_blocks):
                 res.append(ResBlock(ch, dropout, kernel_size=kernel_size))
-            res.append(Downsample(ch, use_conv=True, out_channels=ch*2, factor=downsample_factor))
+            res.append(Downsample(ch, use_conv=True,
+                       out_channels=ch*2, factor=downsample_factor))
             ch *= 2
         self.res = nn.Sequential(*res)
         self.final = nn.Sequential(
@@ -289,7 +299,8 @@ class AudioMiniEncoder(nn.Module):
         return h[:, :, 0]
 
 
-DEFAULT_MEL_NORM_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../data/mel_norms.pth')
+DEFAULT_MEL_NORM_FILE = os.path.join(os.path.dirname(
+    os.path.realpath(__file__)), '../data/mel_norms.pth')
 
 
 class TorchMelSpectrogram(nn.Module):
@@ -334,13 +345,15 @@ class CheckpointedLayer(nn.Module):
     Wraps a module. When forward() is called, passes kwargs that require_grad through torch.checkpoint() and bypasses
     checkpoint for all other args.
     """
+
     def __init__(self, wrap):
         super().__init__()
         self.wrap = wrap
 
     def forward(self, x, *args, **kwargs):
         for k, v in kwargs.items():
-            assert not (isinstance(v, torch.Tensor) and v.requires_grad)  # This would screw up checkpointing.
+            # This would screw up checkpointing.
+            assert not (isinstance(v, torch.Tensor) and v.requires_grad)
         partial = functools.partial(self.wrap, **kwargs)
         return partial(x, *args)
 
@@ -350,6 +363,7 @@ class CheckpointedXTransformerEncoder(nn.Module):
     Wraps a ContinuousTransformerWrapper and applies CheckpointedLayer to each layer and permutes from channels-mid
     to channels-last that XTransformer expects.
     """
+
     def __init__(self, needs_permute=True, exit_permute=True, checkpoint=True, **xtransformer_kwargs):
         super().__init__()
         self.transformer = ContinuousTransformerWrapper(**xtransformer_kwargs)
@@ -360,12 +374,13 @@ class CheckpointedXTransformerEncoder(nn.Module):
             return
         for i in range(len(self.transformer.attn_layers.layers)):
             n, b, r = self.transformer.attn_layers.layers[i]
-            self.transformer.attn_layers.layers[i] = nn.ModuleList([n, CheckpointedLayer(b), r])
+            self.transformer.attn_layers.layers[i] = nn.ModuleList(
+                [n, CheckpointedLayer(b), r])
 
     def forward(self, x, **kwargs):
         if self.needs_permute:
-            x = x.permute(0,2,1)
+            x = x.permute(0, 2, 1)
         h = self.transformer(x, **kwargs)
         if self.exit_permute:
-            h = h.permute(0,2,1)
+            h = h.permute(0, 2, 1)
         return h
